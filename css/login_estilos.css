@@ -1,0 +1,101 @@
+/* Fondo con animación galáctica */
+body, html {
+    height: 100%;
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(-45deg, #2b2b42, #3e3e6b, #4b6cb7, #182848);
+    background-size: 400% 400%;
+    animation: moverFondo 10s ease infinite;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+}
+
+/* Animación del fondo */
+@keyframes moverFondo {
+    0% {background-position: 0% 50%;}
+    50% {background-position: 100% 50%;}
+    100% {background-position: 0% 50%;}
+}
+
+.login-container {
+    background: rgba(255, 255, 255, 0.1); /* Fondo semitransparente */
+    padding: 40px;
+    border-radius: 20px;
+    backdrop-filter: blur(15px); /* Filtro de desenfoque más fuerte */
+    box-shadow: 0 0 30px rgba(255, 255, 255, 0.2); /* Sombras difusas */
+    text-align: center;
+    width: 90%; /* Ancho máximo ajustable */
+    max-width: 400px; /* Limita el ancho máximo en pantallas grandes */
+    overflow: hidden; /* Evita bordes visibles */
+}
+
+.login-container h2 {
+    color: #fff;
+    margin-bottom: 20px;
+}
+
+input[type="email"], input[type="password"] {
+    width: 100%;
+    padding: 12px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 8px;
+    background: #f2f2f2;
+    font-size: 14px;
+}
+
+button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background-color: #4b6cb7;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.3s ease;
+}
+
+button:hover {
+    background-color: #182848;
+}
+
+.error {
+    color: #ffaaaa;
+    margin-bottom: 15px;
+}
+
+.volver-btn {
+    display: inline-block;
+    margin-top: 15px;
+    color: #ddd;
+    text-decoration: none;
+    font-size: 14px;
+    transition: 0.3s;
+}
+
+.volver-btn:hover {
+    color: white;
+}
+
+/* Medios para dispositivos móviles */
+@media (max-width: 600px) {
+    .login-container {
+        padding: 20px;
+        max-width: 350px; /* Ajusta el tamaño para pantallas más pequeñas */
+    }
+
+    h2 {
+        font-size: 22px; /* Ajusta el tamaño del título */
+    }
+
+    input[type="email"], input[type="password"] {
+        font-size: 16px; /* Aumenta el tamaño de los campos en móviles */
+    }
+
+    button {
+        padding: 14px; /* Aumenta el tamaño del botón en móviles */
+    }
+}
