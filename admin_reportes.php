@@ -6,175 +6,136 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] != 'admin') {
 }
 
 $conn = new mysqli('localhost', 'root', '', 'hotel_rivo');
-
 if ($conn->connect_error) {
     die("Conexión fallida: " . $conn->connect_error);
 }
 
-// Estadísticas principales mejoradas (corregidas con validación)
-try {
-    $ingresos = $conn->query("SELECT 
-        SUM(CASE WHEN estado = 'confirmado' THEN monto ELSE 0 END) AS total_ingresos,
-        COUNT(CASE WHEN estado = 'confirmado' THEN 1 END) AS total_pagos,
-        AVG(CASE WHEN estado = 'confirmado' THEN monto ELSE NULL END) AS promedio_pago
-        FROM pagos")->fetch_assoc();
-} catch (Exception $e) {
-    $ingresos = ['total_ingresos' => 0, 'total_pagos' => 0, 'promedio_pago' => 0];
+// Funciones auxiliares para manejo seguro de consultas
+function fetch_or_default($query, $default) {
+    global $conn;
+    try {
+        $result = $conn->query($query);
+        return $result ? $result->fetch_assoc() : $default;
+    } catch (Exception $e) {
+        error_log("Error en consulta: " . $e->getMessage());
+        return $default;
+    }
 }
 
-// Validar datos de ingresos
-$ingresos = $ingresos ?: ['total_ingresos' => 0, 'total_pagos' => 0, 'promedio_pago' => 0];
-
-try {
-    $ocupacion = $conn->query("SELECT 
-        COUNT(CASE WHEN estado = 'ocupada' THEN 1 END) AS habitaciones_ocupadas,
-        COUNT(CASE WHEN estado = 'disponible' THEN 1 END) AS habitaciones_disponibles,
-        COUNT(CASE WHEN estado = 'mantenimiento' THEN 1 END) AS habitaciones_mantenimiento,
-        COUNT(*) AS total_habitaciones
-        FROM habitaciones")->fetch_assoc();
-} catch (Exception $e) {
-    $ocupacion = ['habitaciones_ocupadas' => 0, 'habitaciones_disponibles' => 0, 'habitaciones_mantenimiento' => 0, 'total_habitaciones' => 0];
+function fetch_all_or_default($query) {
+    global $conn;
+    try {
+        $result = $conn->query($query);
+        return $result ? $result->fetch_all(MYSQLI_ASSOC) : [];
+    } catch (Exception $e) {
+        error_log("Error en consulta: " . $e->getMessage());
+        return [];
+    }
 }
 
-// Validar datos de ocupación
-$ocupacion = $ocupacion ?: ['habitaciones_ocupadas' => 0, 'habitaciones_disponibles' => 0, 'habitaciones_mantenimiento' => 0, 'total_habitaciones' => 0];
+// Obtener datos principales de forma segura
+$ingresos = fetch_or_default("SELECT 
+    SUM(CASE WHEN estado = 'confirmado' THEN monto ELSE 0 END) AS total_ingresos,
+    COUNT(CASE WHEN estado = 'confirmado' THEN 1 END) AS total_pagos,
+    AVG(CASE WHEN estado = 'confirmado' THEN monto ELSE NULL END) AS promedio_pago
+    FROM pagos", ['total_ingresos' => 0, 'total_pagos' => 0, 'promedio_pago' => 0]);
 
-try {
-    $reservas_stats = $conn->query("SELECT 
-        COUNT(CASE WHEN estado = 'confirmada' THEN 1 END) AS reservas_confirmadas,
-        COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) AS reservas_pendientes,
-        COUNT(CASE WHEN estado = 'cancelada' THEN 1 END) AS reservas_canceladas,
-        COUNT(*) AS total_reservas
-        FROM reservas")->fetch_assoc();
-} catch (Exception $e) {
-    $reservas_stats = ['reservas_confirmadas' => 0, 'reservas_pendientes' => 0, 'reservas_canceladas' => 0, 'total_reservas' => 0];
-}
+$ocupacion = fetch_or_default("SELECT 
+    COUNT(CASE WHEN estado = 'ocupada' THEN 1 END) AS habitaciones_ocupadas,
+    COUNT(CASE WHEN estado = 'disponible' THEN 1 END) AS habitaciones_disponibles,
+    COUNT(CASE WHEN estado = 'mantenimiento' THEN 1 END) AS habitaciones_mantenimiento,
+    COUNT(*) AS total_habitaciones
+    FROM habitaciones", ['habitaciones_ocupadas' => 0, 'habitaciones_disponibles' => 0, 'habitaciones_mantenimiento' => 0, 'total_habitaciones' => 0]);
 
-// Validar datos de reservas
-$reservas_stats = $reservas_stats ?: ['reservas_confirmadas' => 0, 'reservas_pendientes' => 0, 'reservas_canceladas' => 0, 'total_reservas' => 0];
+$reservas_stats = fetch_or_default("SELECT 
+    COUNT(CASE WHEN estado = 'confirmada' THEN 1 END) AS reservas_confirmadas,
+    COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) AS reservas_pendientes,
+    COUNT(CASE WHEN estado = 'cancelada' THEN 1 END) AS reservas_canceladas,
+    COUNT(*) AS total_reservas
+    FROM reservas", ['reservas_confirmadas' => 0, 'reservas_pendientes' => 0, 'reservas_canceladas' => 0, 'total_reservas' => 0]);
 
-// Verificar si existe la tabla comentarios antes de consultarla
+// Verificar tabla comentarios
+$comentarios_stats = ['promedio_puntuacion' => 0, 'total_comentarios' => 0, 'comentarios_positivos' => 0];
 $comentarios_result = $conn->query("SHOW TABLES LIKE 'comentarios'");
-if ($comentarios_result->num_rows > 0) {
-    $comentarios_stats = $conn->query("SELECT 
+if ($comentarios_result && $comentarios_result->num_rows > 0) {
+    $comentarios_stats = fetch_or_default("SELECT 
         AVG(puntuacion) AS promedio_puntuacion,
         COUNT(*) AS total_comentarios,
         COUNT(CASE WHEN puntuacion >= 4 THEN 1 END) AS comentarios_positivos
-        FROM comentarios")->fetch_assoc();
-} else {
-    $comentarios_stats = [
-        'promedio_puntuacion' => 0,
-        'total_comentarios' => 0,
-        'comentarios_positivos' => 0
-    ];
+        FROM comentarios", $comentarios_stats);
 }
 
-// Ingresos mensuales del año actual (corregida con validación)
-try {
-    $ingresos_mensuales = $conn->query("SELECT 
-        MONTH(fecha_pago) AS mes,
-        MONTHNAME(fecha_pago) AS nombre_mes,
-        SUM(CASE WHEN estado = 'confirmado' THEN monto ELSE 0 END) AS ingresos_mes,
-        COUNT(CASE WHEN estado = 'confirmado' THEN 1 END) AS pagos_mes
-        FROM pagos 
-        WHERE YEAR(fecha_pago) = YEAR(CURDATE())
-        GROUP BY MONTH(fecha_pago), MONTHNAME(fecha_pago)
-        ORDER BY MONTH(fecha_pago)")->fetch_all(MYSQLI_ASSOC);
-} catch (Exception $e) {
-    $ingresos_mensuales = [];
+// Filtros de fecha
+$filtro_fecha = "";
+if (isset($_GET['desde'], $_GET['hasta'])) {
+    $desde = $conn->real_escape_string($_GET['desde']);
+    $hasta = $conn->real_escape_string($_GET['hasta']);
+    $filtro_fecha = " AND fecha_pago BETWEEN '$desde' AND '$hasta'";
 }
 
-// Asegurar que $ingresos_mensuales sea siempre un array
-if (!is_array($ingresos_mensuales)) {
-    $ingresos_mensuales = [];
-}
+// Ingresos mensuales con filtros opcionales
+$ingresos_mensuales = fetch_all_or_default("SELECT 
+    MONTH(fecha_pago) AS mes,
+    MONTHNAME(fecha_pago) AS nombre_mes,
+    SUM(CASE WHEN estado = 'confirmado' THEN monto ELSE 0 END) AS ingresos_mes,
+    COUNT(CASE WHEN estado = 'confirmado' THEN 1 END) AS pagos_mes
+    FROM pagos 
+    WHERE YEAR(fecha_pago) = YEAR(CURDATE()) $filtro_fecha
+    GROUP BY MONTH(fecha_pago), MONTHNAME(fecha_pago)
+    ORDER BY MONTH(fecha_pago)");
 
-// Tipos de habitación más reservados (corregida con manejo de errores)
-try {
-    $tipos_populares = $conn->query("SELECT 
-        th.nombre as tipo_habitacion,
-        COUNT(r.id_reserva) as total_reservas,
-        SUM(CASE WHEN p.estado = 'confirmado' THEN p.monto ELSE 0 END) as ingresos_tipo
-        FROM reservas r
-        INNER JOIN habitaciones h ON r.id_habitacion = h.id_habitacion
-        INNER JOIN tipos_habitacion th ON h.id_tipo = th.id_tipo
+$tipos_populares = fetch_all_or_default("SELECT 
+    th.nombre as tipo_habitacion,
+    COUNT(r.id_reserva) as total_reservas,
+    SUM(CASE WHEN p.estado = 'confirmado' THEN p.monto ELSE 0 END) as ingresos_tipo
+    FROM reservas r
+    INNER JOIN habitaciones h ON r.id_habitacion = h.id_habitacion
+    INNER JOIN tipos_habitacion th ON h.id_tipo = th.id_tipo
+    LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
+    WHERE r.estado IN ('confirmada', 'completada')
+    GROUP BY th.id_tipo, th.nombre
+    ORDER BY total_reservas DESC");
+
+// Verificar tabla tarifas
+$temporadas_stats = [];
+$tarifas_existe = $conn->query("SHOW TABLES LIKE 'tarifas'");
+if ($tarifas_existe && $tarifas_existe->num_rows > 0) {
+    $temporadas_stats = fetch_all_or_default("SELECT 
+        t.temporada,
+        COUNT(CASE WHEN r.fecha_entrada BETWEEN t.fecha_inicio AND t.fecha_fin THEN r.id_reserva END) as reservas_temporada,
+        AVG(CASE WHEN p.estado = 'confirmado' AND r.fecha_entrada BETWEEN t.fecha_inicio AND t.fecha_fin THEN p.monto ELSE NULL END) as promedio_ingresos
+        FROM tarifas t
+        LEFT JOIN habitaciones h ON h.id_tipo = t.id_tipo
+        LEFT JOIN reservas r ON r.id_habitacion = h.id_habitacion
         LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
-        WHERE r.estado IN ('confirmada', 'completada')
-        GROUP BY th.id_tipo, th.nombre
-        ORDER BY total_reservas DESC")->fetch_all(MYSQLI_ASSOC);
-} catch (Exception $e) {
-    $tipos_populares = [];
+        WHERE t.activa = 1
+        GROUP BY t.temporada
+        ORDER BY reservas_temporada DESC");
 }
 
-// Asegurar que $tipos_populares sea siempre un array
-if (!is_array($tipos_populares)) {
-    $tipos_populares = [];
+$fecha_inicio = fetch_or_default("SELECT MIN(fecha_pago) as primera_fecha FROM pagos WHERE fecha_pago IS NOT NULL", ['primera_fecha' => null]);
+$fecha_fin = fetch_or_default("SELECT MAX(fecha_pago) as ultima_fecha FROM pagos WHERE fecha_pago IS NOT NULL", ['ultima_fecha' => null]);
+
+$clientes_frecuentes = fetch_all_or_default("SELECT 
+    u.nombre,
+    u.email,
+    COUNT(r.id_reserva) as total_reservas,
+    SUM(CASE WHEN p.estado = 'confirmado' THEN p.monto ELSE 0 END) as total_gastado
+    FROM usuarios u
+    INNER JOIN reservas r ON u.id_usuario = r.id_usuario
+    LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
+    WHERE u.rol = 'cliente'
+    GROUP BY u.id_usuario, u.nombre, u.email
+    HAVING total_reservas > 1
+    ORDER BY total_reservas DESC
+    LIMIT 10");
+
+// Comentarios destacados
+$comentarios_destacados = [];
+if ($comentarios_result && $comentarios_result->num_rows > 0) {
+    $comentarios_destacados = fetch_all_or_default("SELECT nombre, comentario, puntuacion FROM comentarios ORDER BY puntuacion DESC LIMIT 5");
 }
 
-// Verificar estructura de tablas y obtener datos de forma segura
-try {
-    // Verificar si existe la tabla tarifas
-    $tarifas_existe = $conn->query("SHOW TABLES LIKE 'tarifas'")->num_rows > 0;
-    
-    if ($tarifas_existe) {
-        // Estadísticas de temporadas (corregida)
-        $temporadas_stats = $conn->query("SELECT 
-            t.temporada,
-            COUNT(CASE WHEN r.fecha_entrada BETWEEN t.fecha_inicio AND t.fecha_fin THEN r.id_reserva END) as reservas_temporada,
-            AVG(CASE WHEN p.estado = 'confirmado' AND r.fecha_entrada BETWEEN t.fecha_inicio AND t.fecha_fin THEN p.monto ELSE NULL END) as promedio_ingresos
-            FROM tarifas t
-            LEFT JOIN habitaciones h ON h.id_tipo = t.id_tipo
-            LEFT JOIN reservas r ON r.id_habitacion = h.id_habitacion
-            LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
-            WHERE t.activa = 1
-            GROUP BY t.temporada
-            ORDER BY reservas_temporada DESC")->fetch_all(MYSQLI_ASSOC);
-    } else {
-        $temporadas_stats = [];
-    }
-} catch (Exception $e) {
-    $temporadas_stats = [];
-}
-
-// Asegurar que $temporadas_stats sea siempre un array
-if (!is_array($temporadas_stats)) {
-    $temporadas_stats = [];
-}
-
-// Manejo seguro de fechas para el período de análisis
-try {
-    $fecha_inicio = $conn->query("SELECT MIN(fecha_pago) as primera_fecha FROM pagos WHERE fecha_pago IS NOT NULL")->fetch_assoc();
-    $fecha_fin = $conn->query("SELECT MAX(fecha_pago) as ultima_fecha FROM pagos WHERE fecha_pago IS NOT NULL")->fetch_assoc();
-} catch (Exception $e) {
-    $fecha_inicio = ['primera_fecha' => null];
-    $fecha_fin = ['ultima_fecha' => null];
-}
-
-// Clientes frecuentes (corregida y con manejo de errores)
-try {
-    $clientes_frecuentes = $conn->query("SELECT 
-        u.nombre,
-        u.email,
-        COUNT(r.id_reserva) as total_reservas,
-        SUM(CASE WHEN p.estado = 'confirmado' THEN p.monto ELSE 0 END) as total_gastado
-        FROM usuarios u
-        INNER JOIN reservas r ON u.id_usuario = r.id_usuario
-        LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
-        WHERE u.rol = 'cliente'
-        GROUP BY u.id_usuario, u.nombre, u.email
-        HAVING total_reservas > 1
-        ORDER BY total_reservas DESC
-        LIMIT 10")->fetch_all(MYSQLI_ASSOC);
-} catch (Exception $e) {
-    $clientes_frecuentes = [];
-}
-
-// Asegurar que $clientes_frecuentes sea siempre un array
-if (!is_array($clientes_frecuentes)) {
-    $clientes_frecuentes = [];
-}
-
-// Calcular porcentaje de ocupación de forma segura
 $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ? 
     round(($ocupacion['habitaciones_ocupadas'] / $ocupacion['total_habitaciones']) * 100, 1) : 0;
 ?>
@@ -202,7 +163,7 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 30px;
-            border-radius: 10px;
+            border-radius: 15px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
             margin-bottom: 30px;
         }
@@ -219,6 +180,8 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             justify-content: space-between;
             align-items: center;
             margin-top: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
         }
         .btn {
             padding: 12px 24px;
@@ -231,18 +194,50 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             transition: all 0.3s;
             display: inline-block;
             text-align: center;
-            margin-right: 10px;
         }
         .btn-primary { background: #007bff; color: white; }
         .btn-secondary { background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); }
         .btn-success { background: #28a745; color: white; }
+        .btn-warning { background: #ffc107; color: #212529; }
         .btn:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
+        .filter-section {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            margin-bottom: 30px;
+        }
+        .filter-form {
+            display: flex;
+            gap: 20px;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .filter-group label {
+            font-weight: bold;
+            color: #333;
+        }
+        .filter-group input {
+            padding: 10px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .filter-group input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
@@ -254,6 +249,11 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             text-align: center;
             position: relative;
             overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
         }
         .stat-card::before {
             content: '';
@@ -265,7 +265,7 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             background: linear-gradient(90deg, #667eea, #764ba2);
         }
         .stat-number {
-            font-size: 3em;
+            font-size: 2.5em;
             font-weight: bold;
             margin-bottom: 10px;
             background: linear-gradient(135deg, #667eea, #764ba2);
@@ -277,6 +277,7 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             color: #666;
             font-weight: 600;
             margin-bottom: 5px;
+            font-size: 1.1em;
         }
         .stat-subtitle {
             color: #999;
@@ -284,7 +285,7 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
         }
         .charts-grid {
             display: grid;
-            grid-template-columns: 2fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
             gap: 30px;
             margin-bottom: 30px;
         }
@@ -293,6 +294,7 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             padding: 30px;
             border-radius: 15px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            position: relative;
         }
         .chart-title {
             font-size: 1.4em;
@@ -386,6 +388,23 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             gap: 15px;
             flex-wrap: wrap;
         }
+        .comment-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #ffc107;
+        }
+        .comment-rating {
+            color: #ff9800;
+            font-weight: bold;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
         @media (max-width: 768px) {
             .charts-grid {
                 grid-template-columns: 1fr;
@@ -396,18 +415,16 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             .reports-grid {
                 grid-template-columns: 1fr;
             }
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-            color: #666;
+            .filter-form {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
+        <!-- Header principal -->
         <div class="header">
             <h1>📊 Reportes y Estadísticas</h1>
             <div class="header-subtitle">
@@ -420,50 +437,72 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                     <a href="admin_habitaciones.php" class="btn btn-secondary">🏨 Habitaciones</a>
                 </div>
                 <div>
-                    <button onclick="actualizarDatos()" class="btn btn-primary">🔄 Actualizar</button>
+                    <button onclick="window.print()" class="btn btn-warning">🖨️ Imprimir</button>
                     <button onclick="exportarReporte()" class="btn btn-success">📥 Exportar</button>
                 </div>
             </div>
         </div>
 
-        <!-- Período de análisis -->
-        <div class="period-info">
-            <strong>📅 Período de análisis:</strong> 
-            <?= $fecha_inicio['primera_fecha'] ? date('d/m/Y', strtotime($fecha_inicio['primera_fecha'])) : 'N/A' ?> - 
-            <?= $fecha_fin['ultima_fecha'] ? date('d/m/Y', strtotime($fecha_fin['ultima_fecha'])) : 'N/A' ?>
-            (Datos actualizados en tiempo real)
+        <!-- Filtros de fecha -->
+        <div class="filter-section">
+            <h3 style="margin: 0 0 20px 0; color: #333;">🔍 Filtros de Análisis</h3>
+            <form method="get" class="filter-form">
+                <div class="filter-group">
+                    <label for="desde">📅 Fecha desde:</label>
+                    <input type="date" id="desde" name="desde" value="<?= $_GET['desde'] ?? '' ?>">
+                </div>
+                <div class="filter-group">
+                    <label for="hasta">📅 Fecha hasta:</label>
+                    <input type="date" id="hasta" name="hasta" value="<?= $_GET['hasta'] ?? '' ?>">
+                </div>
+                <div class="filter-group">
+                    <button type="submit" class="btn btn-primary">🔎 Filtrar</button>
+                </div>
+                <?php if (isset($_GET['desde']) && isset($_GET['hasta'])): ?>
+                    <div class="filter-group">
+                        <a href="<?= strtok($_SERVER['REQUEST_URI'], '?') ?>" class="btn btn-secondary">🗑️ Quitar filtro</a>
+                    </div>
+                <?php endif; ?>
+            </form>
+            
+            <?php if (isset($_GET['desde']) && isset($_GET['hasta'])): ?>
+                <div class="period-info">
+                    <strong>📊 Período analizado:</strong> 
+                    <?= date('d/m/Y', strtotime($_GET['desde'])) ?> - <?= date('d/m/Y', strtotime($_GET['hasta'])) ?>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- Estadísticas principales -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-number">$<?= number_format($ingresos['total_ingresos'] ?? 0, 0, ',', '.') ?></div>
+                <div class="stat-number">$<?= number_format($ingresos['total_ingresos'], 0, ',', '.') ?></div>
                 <div class="stat-label">Ingresos Totales</div>
-                <div class="stat-subtitle"><?= $ingresos['total_pagos'] ?? 0 ?> pagos realizados</div>
+                <div class="stat-subtitle"><?= $ingresos['total_pagos'] ?> pagos confirmados</div>
             </div>
             
             <div class="stat-card">
                 <div class="stat-number"><?= $porcentaje_ocupacion ?>%</div>
                 <div class="stat-label">Ocupación Actual</div>
-                <div class="stat-subtitle"><?= $ocupacion['habitaciones_ocupadas'] ?? 0 ?>/<?= $ocupacion['total_habitaciones'] ?? 0 ?> habitaciones</div>
+                <div class="stat-subtitle"><?= $ocupacion['habitaciones_ocupadas'] ?>/<?= $ocupacion['total_habitaciones'] ?> habitaciones</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-number"><?= $reservas_stats['reservas_confirmadas'] ?? 0 ?></div>
+                <div class="stat-number"><?= $reservas_stats['reservas_confirmadas'] ?></div>
                 <div class="stat-label">Reservas Confirmadas</div>
-                <div class="stat-subtitle">De <?= $reservas_stats['total_reservas'] ?? 0 ?> totales</div>
+                <div class="stat-subtitle">De <?= $reservas_stats['total_reservas'] ?> totales</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-number"><?= number_format($comentarios_stats['promedio_puntuacion'] ?? 0, 1) ?></div>
+                <div class="stat-number"><?= number_format($comentarios_stats['promedio_puntuacion'], 1) ?></div>
                 <div class="stat-label">Puntuación Promedio</div>
-                <div class="stat-subtitle"><?= $comentarios_stats['total_comentarios'] ?? 0 ?> evaluaciones</div>
+                <div class="stat-subtitle"><?= $comentarios_stats['total_comentarios'] ?> evaluaciones</div>
             </div>
             
             <div class="stat-card">
-                <div class="stat-number">$<?= number_format($ingresos['promedio_pago'] ?? 0, 0, ',', '.') ?></div>
+                <div class="stat-number">$<?= number_format($ingresos['promedio_pago'], 0, ',', '.') ?></div>
                 <div class="stat-label">Ticket Promedio</div>
-                <div class="stat-subtitle">Por reserva</div>
+                <div class="stat-subtitle">Por pago</div>
             </div>
             
             <div class="stat-card">
@@ -531,15 +570,15 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                 <div class="section-content">
                     <div class="metric-row">
                         <span class="metric-label">Habitaciones Ocupadas</span>
-                        <span class="metric-value"><?= $ocupacion['habitaciones_ocupadas'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $ocupacion['habitaciones_ocupadas'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">Habitaciones Disponibles</span>
-                        <span class="metric-value"><?= $ocupacion['habitaciones_disponibles'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $ocupacion['habitaciones_disponibles'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">En Mantenimiento</span>
-                        <span class="metric-value"><?= $ocupacion['habitaciones_mantenimiento'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $ocupacion['habitaciones_mantenimiento'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">Tasa de Ocupación</span>
@@ -556,19 +595,19 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                 <div class="section-content">
                     <div class="metric-row">
                         <span class="metric-label">Confirmadas</span>
-                        <span class="metric-value"><?= $reservas_stats['reservas_confirmadas'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $reservas_stats['reservas_confirmadas'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">Pendientes</span>
-                        <span class="metric-value"><?= $reservas_stats['reservas_pendientes'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $reservas_stats['reservas_pendientes'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">Canceladas</span>
-                        <span class="metric-value"><?= $reservas_stats['reservas_canceladas'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $reservas_stats['reservas_canceladas'] ?></span>
                     </div>
                     <div class="metric-row">
                         <span class="metric-label">Total</span>
-                        <span class="metric-value"><?= $reservas_stats['total_reservas'] ?? 0 ?></span>
+                        <span class="metric-value"><?= $reservas_stats['total_reservas'] ?></span>
                     </div>
                 </div>
             </div>
@@ -593,7 +632,10 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                             <tbody>
                                 <?php foreach (array_slice($clientes_frecuentes, 0, 5) as $cliente): ?>
                                 <tr>
-                                    <td><?= htmlspecialchars($cliente['nombre']) ?></td>
+                                    <td>
+                                        <div style="font-weight: bold;"><?= htmlspecialchars($cliente['nombre']) ?></div>
+                                        <div style="font-size: 0.8em; color: #666;"><?= htmlspecialchars($cliente['email']) ?></div>
+                                    </td>
                                     <td><?= $cliente['total_reservas'] ?></td>
                                     <td class="metric-value money">$<?= number_format($cliente['total_gastado'], 0, ',', '.') ?></td>
                                 </tr>
@@ -603,6 +645,28 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                     <?php endif; ?>
                 </div>
             </div>
+
+            <!-- Comentarios destacados -->
+            <?php if (!empty($comentarios_destacados)): ?>
+            <div class="report-section">
+                <div class="section-header">
+                    💬 Comentarios Destacados
+                </div>
+                <div class="section-content">
+                    <?php foreach ($comentarios_destacados as $comentario): ?>
+                        <div class="comment-item">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <strong><?= htmlspecialchars($comentario['nombre']) ?></strong>
+                                <span class="comment-rating"><?= $comentario['puntuacion'] ?>/5 ⭐</span>
+                            </div>
+                            <div style="font-style: italic; color: #555;">
+                                "<?= htmlspecialchars($comentario['comentario']) ?>"
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
 
         <!-- Loading indicator -->
@@ -611,21 +675,14 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
         </div>
     </div>
 
+    <!-- Script JavaScript limpio y optimizado -->
     <script>
         // Datos para gráficos
         const mesesData = {
-            labels: [<?php 
-                foreach ($ingresos_mensuales as $mes) {
-                    echo "'" . ($mes['nombre_mes'] ?? 'Mes ' . $mes['mes']) . "',";
-                } 
-            ?>],
+            labels: <?= json_encode(array_column($ingresos_mensuales, 'nombre_mes')) ?>,
             datasets: [{
-                label: 'Ingresos (COP)',
-                data: [<?php 
-                    foreach ($ingresos_mensuales as $mes) {
-                        echo ($mes['ingresos_mes'] ?? 0) . ",";
-                    } 
-                ?>],
+                label: 'Ingresos Confirmados',
+                data: <?= json_encode(array_column($ingresos_mensuales, 'ingresos_mes')) ?>,
                 backgroundColor: 'rgba(102, 126, 234, 0.1)',
                 borderColor: 'rgba(102, 126, 234, 1)',
                 borderWidth: 3,
@@ -642,17 +699,22 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             labels: ['Ocupadas', 'Disponibles', 'Mantenimiento'],
             datasets: [{
                 data: [
-                    <?= $ocupacion['habitaciones_ocupadas'] ?? 0 ?>, 
-                    <?= $ocupacion['habitaciones_disponibles'] ?? 0 ?>, 
-                    <?= $ocupacion['habitaciones_mantenimiento'] ?? 0 ?>
+                    <?= $ocupacion['habitaciones_ocupadas'] ?>, 
+                    <?= $ocupacion['habitaciones_disponibles'] ?>, 
+                    <?= $ocupacion['habitaciones_mantenimiento'] ?>
                 ],
-                backgroundColor: [
-                    '#dc3545',
-                    '#28a745', 
-                    '#ffc107'
-                ],
+                backgroundColor: ['#dc3545', '#28a745', '#ffc107'],
                 borderWidth: 0,
                 hoverOffset: 4
+            }]
+        };
+
+        const tiposData = {
+            labels: <?= json_encode(array_column($tipos_populares, 'tipo_habitacion')) ?>,
+            datasets: [{
+                label: 'Reservas',
+                data: <?= json_encode(array_column($tipos_populares, 'total_reservas')) ?>,
+                backgroundColor: ['#ff6384', '#36a2eb', '#ffcd56', '#4bc0c0', '#9966ff', '#ff9f40']
             }]
         };
 
@@ -663,192 +725,213 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
             plugins: {
                 legend: {
                     position: 'bottom',
-                    labels: {
-                        padding: 20,
-                        usePointStyle: true
-                    }
+                    labels: { padding: 20, usePointStyle: true }
                 }
             }
         };
 
-        // Crear gráfico de ingresos mensuales
-        const ctxIngresos = document.getElementById('ingresosMensualesChart').getContext('2d');
-        new Chart(ctxIngresos, {
-            type: 'line',
-            data: mesesData,
-            options: {
-                ...chartOptions,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            callback: function(value) {
-                                return '$' + new Intl.NumberFormat('es-CO').format(value);
-                            }
-                        }
-                    }
-                },
-                plugins: {
-                    ...chartOptions.plugins,
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return 'Ingresos: $' + new Intl.NumberFormat('es-CO').format(context.parsed.y);
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        // Variables globales
+        let chartIngresos = null;
+        let chartOcupacion = null;
+        let chartTipos = null;
 
-        // Crear gráfico de ocupación
-        const ctxOcupacion = document.getElementById('ocupacionChart').getContext('2d');
-        new Chart(ctxOcupacion, {
-            type: 'doughnut',
-            data: ocupacionData,
-            options: {
-                ...chartOptions,
-                cutout: '60%',
-                plugins: {
-                    ...chartOptions.plugins,
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                                const percentage = ((context.parsed / total) * 100).toFixed(1);
-                                return context.label + ': ' + context.parsed + ' (' + percentage + '%)';
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // Funciones de interacción
-        function actualizarDatos() {
-            const loading = document.getElementById('loadingIndicator');
-            loading.style.display = 'block';
+        // Función para crear gráfico de ingresos
+        function crearGraficoIngresos() {
+            const ctx = document.getElementById('ingresosMensualesChart').getContext('2d');
+            if (chartIngresos) chartIngresos.destroy();
             
-            // Simular actualización
-            setTimeout(() => {
-                location.reload();
-            }, 1000);
+            chartIngresos = new Chart(ctx, {
+                type: 'line',
+                data: mesesData,
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return ' + new Intl.NumberFormat('es-CO').format(value);
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        ...chartOptions.plugins,
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return 'Ingresos:  + new Intl.NumberFormat('es-CO').format(context.parsed.y);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         }
 
+        // Función para crear gráfico de ocupación
+        function crearGraficoOcupacion() {
+            const ctx = document.getElementById('ocupacionChart').getContext('2d');
+            if (chartOcupacion) chartOcupacion.destroy();
+            
+            chartOcupacion = new Chart(ctx, {
+                type: 'doughnut',
+                data: ocupacionData,
+                options: {
+                    ...chartOptions,
+                    cutout: '60%',
+                    plugins: {
+                        ...chartOptions.plugins,
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const percentage = total > 0 ? ((context.parsed / total) * 100).toFixed(1) : 0;
+                                    return context.label + ': ' + context.parsed + ' (' + percentage + '%)';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Función para exportar reporte
         function exportarReporte() {
-            // Preparar datos para exportar
             const fechaActual = new Date().toLocaleDateString('es-CO');
             const nombreArchivo = `reporte_hotel_rivo_${fechaActual.replace(/\//g, '_')}.txt`;
             
             let contenido = `REPORTE HOTEL RIVO - ${fechaActual}\n`;
             contenido += `${'='.repeat(50)}\n\n`;
+            
+            <?php if (isset($_GET['desde']) && isset($_GET['hasta'])): ?>
+                contenido += `PERÍODO ANALIZADO: <?= date('d/m/Y', strtotime($_GET['desde'])) ?> - <?= date('d/m/Y', strtotime($_GET['hasta'])) ?>\n\n`;
+            <?php endif; ?>
+            
             contenido += `RESUMEN EJECUTIVO:\n`;
-            contenido += `- Ingresos Totales: $<?= number_format($ingresos['total_ingresos'] ?? 0, 0, ',', '.') ?>\n`;
+            contenido += `- Ingresos Totales: $<?= number_format($ingresos['total_ingresos'], 0, ',', '.') ?>\n`;
             contenido += `- Ocupación Actual: <?= $porcentaje_ocupacion ?>%\n`;
-            contenido += `- Reservas Confirmadas: <?= $reservas_stats['reservas_confirmadas'] ?? 0 ?>\n`;
-            contenido += `- Puntuación Promedio: <?= number_format($comentarios_stats['promedio_puntuacion'] ?? 0, 1) ?>/5\n\n`;
+            contenido += `- Reservas Confirmadas: <?= $reservas_stats['reservas_confirmadas'] ?>\n`;
+            contenido += `- Puntuación Promedio: <?= number_format($comentarios_stats['promedio_puntuacion'], 1) ?>/5\n\n`;
             
             contenido += `DETALLES DE OCUPACIÓN:\n`;
-            contenido += `- Habitaciones Ocupadas: <?= $ocupacion['habitaciones_ocupadas'] ?? 0 ?>\n`;
-            contenido += `- Habitaciones Disponibles: <?= $ocupacion['habitaciones_disponibles'] ?? 0 ?>\n`;
-            contenido += `- En Mantenimiento: <?= $ocupacion['habitaciones_mantenimiento'] ?? 0 ?>\n`;
-            contenido += `- Total Habitaciones: <?= $ocupacion['total_habitaciones'] ?? 0 ?>\n\n`;
+            contenido += `- Habitaciones Ocupadas: <?= $ocupacion['habitaciones_ocupadas'] ?>\n`;
+            contenido += `- Habitaciones Disponibles: <?= $ocupacion['habitaciones_disponibles'] ?>\n`;
+            contenido += `- En Mantenimiento: <?= $ocupacion['habitaciones_mantenimiento'] ?>\n`;
+            contenido += `- Total Habitaciones: <?= $ocupacion['total_habitaciones'] ?>\n\n`;
+            
+            contenido += `TIPOS DE HABITACIÓN MÁS POPULARES:\n`;
+            <?php if (!empty($tipos_populares)): ?>
+                <?php foreach ($tipos_populares as $index => $tipo): ?>
+                    contenido += `${<?= $index + 1 ?>}. <?= addslashes($tipo['tipo_habitacion']) ?> - <?= $tipo['total_reservas'] ?> reservas ($<?= number_format($tipo['ingresos_tipo'], 0, ',', '.') ?>)\n`;
+                <?php endforeach; ?>
+            <?php else: ?>
+                contenido += `No hay datos disponibles\n`;
+            <?php endif; ?>
+            
+            contenido += `\nCLIENTES FRECUENTES:\n`;
+            <?php if (!empty($clientes_frecuentes)): ?>
+                <?php foreach (array_slice($clientes_frecuentes, 0, 5) as $index => $cliente): ?>
+                    contenido += `${<?= $index + 1 ?>}. <?= addslashes($cliente['nombre']) ?> - <?= $cliente['total_reservas'] ?> reservas ($<?= number_format($cliente['total_gastado'], 0, ',', '.') ?>)\n`;
+                <?php endforeach; ?>
+            <?php else: ?>
+                contenido += `No hay clientes frecuentes registrados\n`;
+            <?php endif; ?>
+            
+            contenido += `\nINGRESOS MENSUALES <?= date('Y') ?>:\n`;
+            <?php foreach ($ingresos_mensuales as $mes): ?>
+                contenido += `- <?= $mes['nombre_mes'] ?? 'Mes ' . $mes['mes'] ?>: $<?= number_format($mes['ingresos_mes'], 0, ',', '.') ?> (<?= $mes['pagos_mes'] ?> pagos)\n`;
+            <?php endforeach; ?>
+            
+            <?php if (!empty($comentarios_destacados)): ?>
+                contenido += `\nCOMENTARIOS DESTACADOS:\n`;
+                <?php foreach ($comentarios_destacados as $comentario): ?>
+                    contenido += `- <?= addslashes($comentario['nombre']) ?> (<?= $comentario['puntuacion'] ?>/5): "<?= addslashes($comentario['comentario']) ?>"\n`;
+                <?php endforeach; ?>
+            <?php endif; ?>
+            
+            contenido += `\n${'='.repeat(50)}\n`;
+            contenido += `Reporte generado automáticamente por Sistema Hotel Rivo\n`;
+            contenido += `Fecha de generación: ${new Date().toLocaleString('es-CO')}\n`;
             
             // Crear y descargar archivo
-            const blob = new Blob([contenido], { type: 'text/plain' });
+            const blob = new Blob([contenido], { type: 'text/plain; charset=utf-8' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
             a.download = nombreArchivo;
+            a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
             
-            alert('📥 Reporte exportado exitosamente');
+            mostrarNotificacion('📥 Reporte exportado exitosamente', 'success');
         }
 
-        // Auto-actualización cada 5 minutos
-        setInterval(() => {
-            console.log('🔄 Verificando actualizaciones...');
-            // Aquí podrías hacer una petición AJAX para verificar cambios
-        }, 300000);
-
-        // Animaciones de entrada
-        document.addEventListener('DOMContentLoaded', function() {
-            const cards = document.querySelectorAll('.stat-card, .report-section, .chart-container');
-            cards.forEach((card, index) => {
-                card.style.opacity = '0';
-                card.style.transform = 'translateY(20px)';
-                setTimeout(() => {
-                    card.style.transition = 'all 0.6s ease';
-                    card.style.opacity = '1';
-                    card.style.transform = 'translateY(0)';
-                }, index * 100);
-            });
-        });
-
-        // Función para imprimir reporte
-        function imprimirReporte() {
-            window.print();
-        }
-
-        // Función para generar PDF (requiere librerías adicionales)
-        function generarPDF() {
-            alert('📄 Función de PDF en desarrollo. Use "Exportar" por ahora.');
-        }
-
-        // Función para filtrar por fechas
-        function filtrarPorFechas() {
-            const fechaInicio = prompt('Fecha de inicio (YYYY-MM-DD):');
-            const fechaFin = prompt('Fecha de fin (YYYY-MM-DD):');
-            
-            if (fechaInicio && fechaFin) {
-                window.location.href = `?fecha_inicio=${fechaInicio}&fecha_fin=${fechaFin}`;
-            }
-        }
-
-        // Tooltips informativos
-        document.querySelectorAll('.stat-card').forEach(card => {
-            card.addEventListener('mouseenter', function() {
-                this.style.transform = 'translateY(-5px) scale(1.02)';
-            });
-            
-            card.addEventListener('mouseleave', function() {
-                this.style.transform = 'translateY(0) scale(1)';
-            });
-        });
-
-        // Función para comparar períodos
-        function compararPeriodos() {
-            alert('📊 Comparación de períodos: Función premium disponible en la versión avanzada');
-        }
-
-        // Notificaciones en tiempo real
+        // Sistema de notificaciones
         function mostrarNotificacion(mensaje, tipo = 'info') {
+            const existentes = document.querySelectorAll('.notificacion-personalizada');
+            if (existentes.length >= 3) existentes[0].remove();
+            
             const notif = document.createElement('div');
+            notif.className = 'notificacion-personalizada';
+            
+            const colores = { 'success': '#28a745', 'info': '#007bff', 'warning': '#ffc107', 'error': '#dc3545' };
+            const iconos = { 'success': '✅', 'info': 'ℹ️', 'warning': '⚠️', 'error': '❌' };
+            
             notif.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 15px 20px;
-                background: ${tipo === 'success' ? '#28a745' : '#007bff'};
-                color: white;
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                z-index: 1000;
-                animation: slideInRight 0.3s ease;
+                position: fixed; top: 20px; right: 20px; padding: 15px 20px;
+                background: ${colores[tipo] || colores.info}; 
+                color: ${tipo === 'warning' ? '#212529' : 'white'};
+                border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 1000; animation: slideInRight 0.3s ease;
+                max-width: 350px; word-wrap: break-word; font-weight: 500;
             `;
-            notif.textContent = mensaje;
+            
+            notif.innerHTML = `${iconos[tipo] || iconos.info} ${mensaje}`;
             document.body.appendChild(notif);
             
             setTimeout(() => {
-                notif.style.animation = 'slideOutRight 0.3s ease';
-                setTimeout(() => notif.remove(), 300);
-            }, 3000);
+                if (notif.parentNode) {
+                    notif.style.animation = 'slideOutRight 0.3s ease';
+                    setTimeout(() => { if (notif.parentNode) notif.remove(); }, 300);
+                }
+            }, tipo === 'error' ? 5000 : 3000);
         }
 
-        // CSS para animaciones de notificaciones
+        // Inicialización del sistema
+        function inicializarSistema() {
+            console.log('🚀 Inicializando sistema de reportes...');
+            
+            try {
+                crearGraficoIngresos();
+                crearGraficoOcupacion();
+                console.log('📊 Gráficos creados exitosamente');
+            } catch (error) {
+                console.error('Error al crear gráficos:', error);
+                mostrarNotificacion('⚠️ Error al cargar gráficos', 'warning');
+            }
+
+            // Animaciones de entrada
+            document.querySelectorAll('.stat-card, .report-section, .chart-container').forEach((card, index) => {
+                if (card) {
+                    card.style.opacity = '0';
+                    card.style.transform = 'translateY(20px)';
+                    setTimeout(() => {
+                        if (card) {
+                            card.style.transition = 'all 0.6s ease';
+                            card.style.opacity = '1';
+                            card.style.transform = 'translateY(0)';
+                        }
+                    }, index * 50);
+                }
+            });
+
+            console.log('✅ Sistema inicializado completamente');
+        }
+
+        // CSS para animaciones
         const style = document.createElement('style');
         style.textContent = `
             @keyframes slideInRight {
@@ -860,52 +943,28 @@ $porcentaje_ocupacion = ($ocupacion['total_habitaciones'] > 0) ?
                 to { transform: translateX(100%); opacity: 0; }
             }
             @media print {
-                .btn, .actions-header { display: none !important; }
-                .chart-container { page-break-inside: avoid; }
+                .btn, .actions-header, .filter-section { display: none !important; }
+                .chart-container, .report-section { page-break-inside: avoid; }
                 body { background: white !important; }
+                .header { background: #667eea !important; -webkit-print-color-adjust: exact; }
             }
         `;
         document.head.appendChild(style);
 
-        // Simulación de datos en tiempo real
-        function simularActualizacionTiempoReal() {
-            const elementos = document.querySelectorAll('.stat-number');
-            elementos.forEach(el => {
-                el.style.animation = 'pulse 0.5s ease';
-                setTimeout(() => {
-                    el.style.animation = '';
-                }, 500);
-            });
-            mostrarNotificacion('📊 Datos actualizados', 'success');
+        // Inicialización
+        document.addEventListener('DOMContentLoaded', inicializarSistema);
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', inicializarSistema);
+        } else {
+            inicializarSistema();
         }
 
-        // Agregar animación pulse
-        const pulseStyle = document.createElement('style');
-        pulseStyle.textContent = `
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.05); }
-                100% { transform: scale(1); }
-            }
-        `;
-        document.head.appendChild(pulseStyle);
-
-        // Simulación de actualización cada 30 segundos para demo
-        setInterval(simularActualizacionTiempoReal, 30000);
+        // Limpieza al cerrar
+        window.addEventListener('beforeunload', function() {
+            if (chartIngresos) chartIngresos.destroy();
+            if (chartOcupacion) chartOcupacion.destroy();
+            if (chartTipos) chartTipos.destroy();
+        });
     </script>
-
-    <!-- Sección adicional de herramientas -->
-    <div style="background: white; margin-top: 30px; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
-        <h3 style="margin: 0 0 20px 0; color: #333;">🛠️ Herramientas Adicionales</h3>
-        <div style="display: flex; flex-wrap: wrap; gap: 15px;">
-            <button onclick="filtrarPorFechas()" class="btn btn-secondary">📅 Filtrar por Fechas</button>
-            <button onclick="compararPeriodos()" class="btn btn-secondary">📊 Comparar Períodos</button>
-            <button onclick="imprimirReporte()" class="btn btn-secondary">🖨️ Imprimir</button>
-            <button onclick="generarPDF()" class="btn btn-secondary">📄 Generar PDF</button>
-        </div>
-        <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #007bff;">
-            <small><strong>💡 Consejo:</strong> Para análisis detallados, use los filtros de fecha y compare diferentes períodos para identificar tendencias.</small>
-        </div>
-    </div>
 </body>
 </html>
